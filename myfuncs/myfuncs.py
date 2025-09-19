@@ -1,23 +1,8 @@
 import os
 import pandas as pd
+import numpy as np
 import inspect as insp
-from sqlalchemy import create_engine
 from IPython.display import display as original_display
-
-# -----------------------------
-# DATABASE CONNECTION
-# -----------------------------
-
-# Database credentials
-db_host = 'LBHHLWSQL0001.lbhf.gov.uk'
-db_port = '1433'
-db_name = 'IA_ODS'
-
-# Create the connection string for SQL Server using pyodbc with Windows Authentication
-connection_string = f'mssql+pyodbc://@{db_host}:{db_port}/{db_name}?driver=ODBC+Driver+17+for+SQL+Server&Trusted_Connection=yes'
-
-# Create the database engine
-engine = create_engine(connection_string)
 
 # -----------------------------
 # UTILITY FUNCTIONS
@@ -53,7 +38,6 @@ def get_var_name(var):
                 return name
     except Exception as e:
         print(f'Error getting variable name: {e}')
-    return None
  
  
 def header_list(df):
@@ -131,11 +115,22 @@ def display(df, max_columns=True, max_rows=False, **kwargs):
  
         if name not in {'df', 'Unnamed DataFrame', 'unique_counts'}:
             print(f"DataFrame: {name}")
-        if name != 'info_df':
+        if name not in {'info_df', None}:
             number_of_records = df.shape[0]
-            print(f"Number of records: {number_of_records:,}")
-        else:
-            print(f"Number of duplicated records: {kwargs.get('duplicate_count', None)}")
+            number_of_fields = df.shape[1]
+            duplicate_count = df.duplicated(keep=False).sum()
+            unique_duplicate_count = duplicate_count - df.duplicated(keep='first').sum()
+            print(
+                f"Number of records: {number_of_records:,}",
+                " | ",
+                f"Number of fields: {number_of_fields:,}\n",
+                f"Number of unique duplicate records: {unique_duplicate_count}"
+                " | ",
+                f"Total number of duplicate records: {duplicate_count}"
+            )
+        elif name == 'info_df':
+            print(f"Max number of non-null records: {kwargs.get('max_records', "N/A")}")
+        
         if max_columns:
             pd.set_option('display.max_columns', None)
         if max_rows:
@@ -212,14 +207,14 @@ def validate_data(df, show_df=10):
  
         # Unique values and non-null counts
         info_df = pd.DataFrame(df.nunique())
-        non_null = pd.DataFrame(df.notnull().sum())
+        non_null = pd.DataFrame(len(df) - df.notnull().sum())
         dtypes = pd.DataFrame(df.dtypes, columns=['Data Type'])
  
         # Merge all metrics into one DataFrame
         info_df = pd.merge(
             info_df, non_null,
             how='left', left_index=True, right_index=True,
-            suffixes=['_unique', '_non_null']
+            suffixes=['_unique', '_null']
         )
  
         info_df = pd.merge(
@@ -232,19 +227,22 @@ def validate_data(df, show_df=10):
         info_df.rename(
             columns={
                 '0_unique': 'No. of Unique Values',
-                '0_non_null': 'No. of Non-Null Values',
+                '0_null': 'No. of Null Values',
                 'index': 'Field Name'
             },
             inplace=True
         )
-        info_df[['No. of Unique Values', 'No. of Non-Null Values']] = info_df[
-            ['No. of Unique Values', 'No. of Non-Null Values']
-        ].applymap(lambda x: f"{x:,}")
+
+        info_df[['No. of Unique Values', 'No. of Null Values']] = info_df[
+            ['No. of Unique Values', 'No. of Null Values']
+        ].map(lambda x: f"{x:,}")
+        
+        info_df['No. of Null Values'].replace({0:"Full"})
 
         # Check for duplicates
-        duplicate_count = df.duplicated().sum()
+        duplicate_count = df.duplicated(keep=False).sum()
 
-        display(info_df, max_rows=True, duplicate_count=duplicate_count)
+        display(info_df, max_rows=True, duplicate_count=duplicate_count, max_records=len(df))
  
         # Summary statistics
         print("\nSummary statistics:")
@@ -254,27 +252,6 @@ def validate_data(df, show_df=10):
         print('#' * 165)
     except Exception as e:
         print(f'Error validating data: {e}')
- 
- 
-def query_data(schema, data):
-    """
-    Queries a table from SQL Server and returns the results as a DataFrame.
- 
-    Args:
-        schema (str): Schema name.
-        data (str): Table name.
- 
-    Returns:
-        pd.DataFrame: Queried data.
-    """
-    try:
-        query = f'SELECT * FROM [{schema}].[{data}]'
-        df = pd.read_sql(query, engine)
-        print(f'Successfully imported {data}')
-        return df
-    except Exception as e:
-        print(f'Error querying data: {e}')
-        return pd.DataFrame()
 
 def export_to_csv(df, **kwargs):
     """
@@ -287,7 +264,7 @@ def export_to_csv(df, **kwargs):
             - df_name (str): Optional name of the DataFrame to use in filename.
     """
     try:
-        directory = kwargs.get('directory', r"C:\Users\jf79\OneDrive - Office Shared Service\Documents\H&F Analysis\Python CSV Repositry")
+        directory = kwargs.get('directory', r"path/to/downloads")
         df_name = kwargs.get('df_name', get_var_name(df))
  
         # Prompt for name if not found
